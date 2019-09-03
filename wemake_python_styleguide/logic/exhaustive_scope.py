@@ -44,6 +44,7 @@ class StmtChain:
 class ExhaustiveScope:
 
     BodyOrElseT = (ast.If, ast.For, ast.AsyncFor, ast.While)
+    ScopeOwnerT = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)
 
     def __init__(self):
         self.stmt_hierarchy = {}
@@ -53,15 +54,19 @@ class ExhaustiveScope:
         self.null_chain = StmtChain([])
 
     def exhaustive(self, node):
-        for stmt in ast.iter_child_nodes(node):
-            if isinstance(stmt, self.BodyOrElseT):
-                self.traverse(stmt)
+        self.traverse(node)
         return self.fold()
 
     def traverse(self, node, shadow_ctx=None):
         shadow_ctx = shadow_ctx or set()
 
-        chain = StmtChain(['body', 'orelse'])
+        if isinstance(node, self.BodyOrElseT):
+            chain = StmtChain(['body', 'orelse'])
+        elif isinstance(node, self.ScopeOwnerT):
+            chain = StmtChain(['body'])
+        else:
+            return
+
         self.chain_of_stmt[node] = chain
 
         for stmt in chain.stmts(node):
