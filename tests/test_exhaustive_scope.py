@@ -195,7 +195,6 @@ class A:
 """
 
 
-
 @pytest.mark.parametrize(('code', 'exhaustive_scope'), [
     (scope_isolation_x, {'x'}),
     (if_x, {'x'}),
@@ -218,3 +217,18 @@ def test_exhaustive_scope(code, exhaustive_scope):
 def test_scope_owners(code, exhaustive_scope):
     for owner_node in ast.parse(code).body:
         assert ExhaustiveScope().exhaustive(owner_node) == exhaustive_scope
+
+
+@pytest.mark.parametrize(('module_code', 'scopped_code', 'exhaustive_scope'), [
+    (yz, scope_owners_x, {'x', 'y', 'z'}),
+    (xz, scope_owners_x, {'x', 'z'}),
+    (xy, scope_owners_x, {'x', 'y'}),
+    (xyz, scope_owners_x, {'x', 'y', 'z'}),
+])
+def test_traverse_multiple_scopes(module_code, scopped_code, exhaustive_scope):
+    module_node = ast.parse(module_code)
+    for owner_node in ast.parse(scopped_code).body:
+        scope = ExhaustiveScope()
+        scope.traverse(owner_node)
+        scope.traverse(module_node)
+        assert scope.fold() == exhaustive_scope
