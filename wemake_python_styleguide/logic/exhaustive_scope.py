@@ -6,50 +6,98 @@ from operator import iand, ior
 import typing
 
 
+class Scopes:
+    """
+    Each scope has its own storage.
+
+    DirectStorage(['body', 'orelse'])
+    """
+
+    def __init__(self, scopes):
+        self.storage = {scope: set() for scope in scopes}
+
+    def __iter__(self):
+        for scope in self.storage:
+            yield scope
+
+    def add(self, scope, value):
+        self.storage[scope].add(value)
+
+    def get(self, scope):
+        return self.storage.get(scope)
+
+    def intersection(self):
+        return reduce(iand, self.storage.values())
+
+
+class NestedScopes(Scopes):
+    """
+    Each scope has its own storage and parent's storages.
+
+    HierarchyStorage({
+        'finalbody': ['excepthandlers', 'orelse'],
+        'body': [],
+        'excepthandlers': [],
+        'orelse': ['body'],
+    })
+    """
+
+    def __init__(self, hierarchy):
+        self.hierarchy = hierarchy
+        super().__init__(list(hierarchy.keys()))
+
+    def add(self, scope, value):
+        super().add(scope, value)
+        for parent_scope in self.hierarchy[scope]:
+            self.add(parent_scope, value)
+
+    def intersection(self):
+        scope_leafs = [
+            self.storage[scope]
+            for scope, descendants in self.hierarchy.items()
+            if not descendants
+        ]
+        return reduce(iand, scope_leafs)
+
+
 class StmtChain:
 
-    def __init__(self, branches):
-        self.context_store = {branch: set() for branch in branches}
+    def __init__(self, storage: Scopes):
+        self.storage = storage
         self.chain_state = ''
 
     def stmts(self, node):
-        for branch in self.context_store:
-            self.chain_state = branch
-            for stmt in getattr(node, branch):
+        for scope in self.storage:
+            self.chain_state = scope
+            for stmt in getattr(node, scope):
                 yield stmt
         self.chain_state = ''
 
-    def is_symmetric(self):
-        contexts = set(
-            frozenset(context)
-            for context in self.context_store.values()
-        )
-        return len(contexts) == 1
-
-    def intersection(self):
-        return reduce(iand, self.context_store.values())
-
-    def context(self):
-        if self.chain_state not in self.context_store:
+    def _check_state(self):
+        if self.chain_state not in self.storage:
             raise ValueError(
-                'You can\'t get context of control flow outside iteration '
+                'You can\'t get scope of control flow outside iteration '
                 'over stmts().'
             )
-        return self.context_store[self.chain_state]
 
-    def __repr__(self):
-        return f'<{type(self).__name__} is_symmetric: {self.is_symmetric()}, context: {self.context_store}>'
+    def scope(self):
+        self._check_state()
+        return self.storage.get(self.chain_state)
+
+    def add_to_scope(self, value):
+        self._check_state()
+        self.storage.add(self.chain_state, value)
 
 
 class ExhaustiveScope:
 
     BodyOrElseT = (ast.If, ast.For, ast.AsyncFor, ast.While)
-    ScopeOwnerT = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)
+    BodyT = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module, ast.ExceptHandler)
 
     def __init__(self):
         self.stmt_hierarchy = {}
         self.chain_of_stmt = {}
-        self.ctx_of_stmt = {}
+        self.scope_of_stmt = {}
 
         self.null_chain = StmtChain([])
 
@@ -57,31 +105,43 @@ class ExhaustiveScope:
         self.traverse(node)
         return self.fold()
 
-    def traverse(self, node, shadow_ctx=None):
-        shadow_ctx = shadow_ctx or set()
+    def traverse(self, node, shadow_scope=None):
+        shadow_scope = shadow_scope or set()
 
         if isinstance(node, self.BodyOrElseT):
-            chain = StmtChain(['body', 'orelse'])
-        elif isinstance(node, self.ScopeOwnerT):
-            chain = StmtChain(['body'])
+            chain = StmtChain(Scopes(['body', 'orelse']))
+        elif isinstance(node, self.BodyT):
+            chain = StmtChain(Scopes(['body']))
+        elif isinstance(node, ast.Try):
+            chain = StmtChain(NestedScopes({
+                'finalbody': ['handlers', 'orelse'],
+                'body': [],
+                'handlers': [],
+                'orelse': ['body'],
+            }))
         else:
             return
 
         self.chain_of_stmt[node] = chain
 
         for stmt in chain.stmts(node):
-            ctx = chain.context()
+            scope = chain.scope()
 
             if isinstance(stmt, ast.Assign):
                 for s in stmt.targets:
                     # skip shadowed assigns
-                    if s.id not in shadow_ctx:
-                        ctx.add(s.id)
+                    if s.id not in shadow_scope:
+                        chain.add_to_scope(s.id)
 
-            elif isinstance(stmt, self.BodyOrElseT):
+            elif isinstance(stmt, ast.ExceptHandler):
                 self.stmt_hierarchy[stmt] = node
-                self.ctx_of_stmt[stmt] = ctx
-                self.traverse(stmt, ctx | shadow_ctx)
+                self.scope_of_stmt[stmt] = scope
+                self.traverse(stmt, shadow_scope)
+
+            elif isinstance(stmt, self.BodyOrElseT + (ast.Try,)):
+                self.stmt_hierarchy[stmt] = node
+                self.scope_of_stmt[stmt] = scope
+                self.traverse(stmt, scope | shadow_scope)
 
     def fold(self):
         if len(self.chain_of_stmt) < 1:
@@ -96,11 +156,11 @@ class ExhaustiveScope:
             for leaf in leafs:
                 del self.stmt_hierarchy[leaf]
                 chain = self.chain_of_stmt.get(leaf, self.null_chain)
-                self.ctx_of_stmt[leaf].update(chain.intersection())
+                self.scope_of_stmt[leaf].update(chain.storage.intersection())
 
         # roots
         safe_vars = [
-            self.chain_of_stmt[root].intersection()
+            self.chain_of_stmt[root].storage.intersection()
             for root in roots
         ]
         return reduce(ior, safe_vars)
