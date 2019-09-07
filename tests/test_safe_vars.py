@@ -3,7 +3,7 @@
 import ast
 from itertools import chain, zip_longest
 
-from wemake_python_styleguide.logic.exhaustive_scope import ExhaustiveScope
+from wemake_python_styleguide.logic.safe_vars import SafeVars, get_safe_vars
 
 import pytest
 
@@ -54,7 +54,7 @@ finally:
 
 body_orelse = [if_else, for_else, async_for_else, while_else]
 
-non_exhaustive_body_orelse = [
+non_safe_vars_body_orelse = [
     control.format(body=x, orelse=y)
     for control, (x, y) in chain(
         zip_longest(body_orelse, [], fillvalue=(ellipsis, ellipsis)),
@@ -71,7 +71,7 @@ body_orelse_x = [
 def try_except_else_finally_format(body='...', handler='...', orelse='...', final='...'):
     return try_except_else_finally.format(body=body, handler=handler, orelse=orelse, final=final)
 
-non_exhaustive_try = [
+non_safe_vars_try = [
     try_except_else_finally_format(),
     try_except_else_finally_format(body=x),
     try_except_else_finally_format(handler=y),
@@ -99,7 +99,7 @@ try_except_else_finally_xyz = [
     try_except_else_finally_format(body=x, handler=y, orelse=z, final=xyz),
 ]
 
-scope_isolation_x = """
+vars_isolation_x = """
 x = 1
 
 def f():
@@ -112,7 +112,7 @@ class F:
     v = 3
 """
 
-scope_owners_x = """
+var_owners_x = """
 def x():
     if _:
         x = 1
@@ -132,7 +132,7 @@ class A:
         x = 2
 """
 
-scope_owners_isolation_x = """
+var_owners_isolation_x = """
 def x():
     def z():
         y = 3
@@ -268,47 +268,47 @@ else:
 
 
 @pytest.mark.parametrize('code', [
-    *non_exhaustive_body_orelse,
-    *non_exhaustive_try,
+    *non_safe_vars_body_orelse,
+    *non_safe_vars_try,
 ])
-def test_non_exhaustive_scopes(code):
-    assert not ExhaustiveScope().exhaustive(ast.parse(code))
+def test_non_safe_vars(code):
+    assert not get_safe_vars(ast.parse(code))
 
 
-@pytest.mark.parametrize(('code', 'exhaustive_scope'), [
+@pytest.mark.parametrize(('code', 'safe_vars'), [
     *list(zip_longest(body_orelse_x, [], fillvalue={'x'})),
     *list(zip_longest(try_except_else_finally_x, [], fillvalue={'x'})),
     *list(zip_longest(try_except_else_finally_xy, [], fillvalue={'x', 'y'})),
     *list(zip_longest(try_except_else_finally_xyz, [], fillvalue={'x', 'y', 'z'})),
-    (scope_isolation_x, {'x'}),
+    (vars_isolation_x, {'x'}),
     (mix_xyz, {'x', 'y', 'z'}),
     (mix_yz, {'y', 'z'}),
     (mix_xy, {'x', 'y'}),
     (mix_xz, {'x', 'z'}),
 ])
-def test_exhaustive_scope(code, exhaustive_scope):
-    assert ExhaustiveScope().exhaustive(ast.parse(code)) == exhaustive_scope
+def test_safe_vars(code, safe_vars):
+    assert get_safe_vars(ast.parse(code)) == safe_vars
 
 
-@pytest.mark.parametrize(('code', 'exhaustive_scope'), [
-    (scope_owners_x, {'x'}),
-    (scope_owners_isolation_x, {'x'}),
+@pytest.mark.parametrize(('code', 'safe_vars'), [
+    (var_owners_x, {'x'}),
+    (var_owners_isolation_x, {'x'}),
 ])
-def test_scope_owners(code, exhaustive_scope):
+def test_var_owners(code, safe_vars):
     for owner_node in ast.parse(code).body:
-        assert ExhaustiveScope().exhaustive(owner_node) == exhaustive_scope
+        assert get_safe_vars(owner_node) == safe_vars
 
 
-@pytest.mark.parametrize(('module_code', 'scopped_code', 'exhaustive_scope'), [
-    (mix_xy, scope_owners_x, {'x', 'y'}),
-    (mix_xz, scope_owners_x, {'x', 'z'}),
-    (mix_xyz, scope_owners_x, {'x', 'y', 'z'}),
-    (mix_yz, scope_owners_x, {'x', 'y', 'z'}),
+@pytest.mark.parametrize(('module_code', 'scopped_code', 'safe_vars'), [
+    (mix_xy, var_owners_x, {'x', 'y'}),
+    (mix_xz, var_owners_x, {'x', 'z'}),
+    (mix_xyz, var_owners_x, {'x', 'y', 'z'}),
+    (mix_yz, var_owners_x, {'x', 'y', 'z'}),
 ])
-def test_traverse_multiple_scopes(module_code, scopped_code, exhaustive_scope):
+def test_find_multiple_vars(module_code, scopped_code, safe_vars):
     module_node = ast.parse(module_code)
     for owner_node in ast.parse(scopped_code).body:
-        scope = ExhaustiveScope()
-        scope.traverse(owner_node)
-        scope.traverse(module_node)
-        assert scope.fold() == exhaustive_scope
+        vars = SafeVars()
+        vars.find(owner_node)
+        vars.find(module_node)
+        assert vars.fold() == safe_vars
