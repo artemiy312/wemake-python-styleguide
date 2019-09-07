@@ -6,7 +6,7 @@ from functools import reduce
 from operator import iand, ior
 import typing
 
-from wemake_python_styleguide.logic.naming.name_nodes import flat_variable_names
+from wemake_python_styleguide.logic.naming.name_nodes import flat_variable_names, get_variables_from_node
 
 
 class Scopes:
@@ -17,21 +17,21 @@ class Scopes:
     """
 
     def __init__(self, scopes):
-        self.vars = {scope: set() for scope in scopes}
+        self.vars_ = {scope: set() for scope in scopes}
 
     def scopes(self):
-        return list(self.vars)
+        return list(self.vars_)
 
     def add_to_scope(self, scope, var):
-        self.vars[scope].add(var)
+        self.vars_[scope].add(var)
 
     def scope_vars(self, scope):
-        return self.vars.get(scope)
+        return self.vars_.get(scope)
 
     def safe_vars(self):
-        if not self.vars:
+        if not self.vars_:
             return set()
-        return reduce(iand, self.vars.values())
+        return reduce(iand, self.vars_.values())
 
 
 class NestedScopes(Scopes):
@@ -56,21 +56,21 @@ class NestedScopes(Scopes):
             self.add_to_scope(parent_scope, var)
 
     def safe_vars(self):
-        vars = [
-            self.vars[scope]
+        vars_ = [
+            self.vars_[scope]
             for scope, descendants in self.hierarchy.items()
             if not descendants
         ]
-        return reduce(iand, vars)
+        return reduce(iand, vars_)
 
 
-class StmtChain:
+class ScopesChain:
 
     def __init__(self, scopes):
         self.scopes = scopes
         self.scope = ''
 
-    def stmts(self, node):
+    def body(self, node):
         for scope in self.scopes:
             self.scope = scope
             for stmt in getattr(node, scope):
@@ -79,8 +79,11 @@ class StmtChain:
 
 class SafeVars:
 
-    BodyOrElseT = (ast.If, ast.For, ast.AsyncFor, ast.While)
-    BodyT = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module, ast.ExceptHandler)
+    BodyOrElse = ast.If, ast.For, ast.AsyncFor, ast.While
+    Body = ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module, ast.ExceptHandler
+    Import = ast.Import, ast.ImportFrom
+    WithItem = ast.With, ast.AsyncWith
+    SharedScope = BodyOrElse + Import + WithItem + (ast.Try,)
 
     def __init__(self):
         self.stmt_hierarchy = {}
@@ -90,10 +93,17 @@ class SafeVars:
         self.null_scopes = Scopes([])
 
     def _get_scopes(self, node):
-        if isinstance(node, self.BodyOrElseT):
+        if isinstance(node, self.BodyOrElse):
             scopes = Scopes(['body', 'orelse'])
-        elif isinstance(node, self.BodyT):
+        elif isinstance(node, self.Body):
             scopes = Scopes(['body'])
+        elif isinstance(node, self.Import):
+            scopes = Scopes(['names'])
+        elif isinstance(node, self.WithItem):
+            scopes = NestedScopes({
+                'body': ['items'],
+                'items': [],
+            })
         elif isinstance(node, ast.Try):
             scopes = NestedScopes({
                 'finalbody': ['handlers', 'orelse'],
@@ -112,9 +122,9 @@ class SafeVars:
         if scopes is self.null_scopes:
             return
 
-        chain = StmtChain(scopes.scopes())
-        for stmt in chain.stmts(node):
-            vars = scopes.scope_vars(chain.scope)
+        chain = ScopesChain(scopes.scopes())
+        for stmt in chain.body(node):
+            vars_ = scopes.scope_vars(chain.scope)
 
             if isinstance(stmt, ast.Assign):
                 for name in flat_variable_names([stmt]):
@@ -122,15 +132,23 @@ class SafeVars:
                     if name not in shadow_vars:
                         scopes.add_to_scope(chain.scope, name)
 
+            elif isinstance(stmt, ast.alias):
+                name = stmt.asname or stmt.name
+                scopes.add_to_scope(chain.scope, name)
+
+            elif isinstance(stmt, ast.withitem) and stmt.optional_vars:
+                for name in get_variables_from_node(stmt.optional_vars):
+                    scopes.add_to_scope(chain.scope, name)
+
             elif isinstance(stmt, ast.ExceptHandler):
                 self.stmt_hierarchy[stmt] = node
-                self.vars_of_stmt[stmt] = vars
+                self.vars_of_stmt[stmt] = vars_
                 self.find(stmt, shadow_vars)
 
-            elif isinstance(stmt, self.BodyOrElseT + (ast.Try,)):
+            elif isinstance(stmt, self.SharedScope):
                 self.stmt_hierarchy[stmt] = node
-                self.vars_of_stmt[stmt] = vars
-                self.find(stmt, vars | shadow_vars)
+                self.vars_of_stmt[stmt] = vars_
+                self.find(stmt, vars_ | shadow_vars)
 
     def fold(self):
         if len(self.scopes_of_stmt) < 1:
@@ -156,6 +174,6 @@ class SafeVars:
 
 
 def get_safe_vars(node):
-    vars = SafeVars()
-    vars.find(node)
-    return vars.fold()
+    vars_ = SafeVars()
+    vars_.find(node)
+    return vars_.fold()

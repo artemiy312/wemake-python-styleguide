@@ -7,6 +7,10 @@ from wemake_python_styleguide.logic.safe_vars import SafeVars, get_safe_vars
 
 import pytest
 
+
+def default_zip(code, vars_):
+    return list(zip_longest(code, [], fillvalue=vars_))
+
 x = 'x=1'
 y = 'y=1'
 z = 'z=1'
@@ -51,22 +55,24 @@ finally:
     {final}
 """
 
-
 body_orelse = [if_else, for_else, async_for_else, while_else]
 
 non_safe_vars_body_orelse = [
     control.format(body=x, orelse=y)
     for control, (x, y) in chain(
-        zip_longest(body_orelse, [], fillvalue=(ellipsis, ellipsis)),
-        zip_longest(body_orelse, [], fillvalue=(x, ellipsis)),
-        zip_longest(body_orelse, [], fillvalue=(ellipsis, x)),
-        zip_longest(body_orelse, [], fillvalue=(x, y)),
+        default_zip(body_orelse, (ellipsis, ellipsis)),
+        default_zip(body_orelse, (x, ellipsis)),
+        default_zip(body_orelse, (ellipsis, x)),
+        default_zip(body_orelse, (x, y)),
     )
 ]
 
 body_orelse_x = [
     control.format(body=x, orelse=x) for control in body_orelse
 ]
+
+import_x = ['import x', 'import _ as x', 'from _ import x', 'from _ import _ as x']
+
 
 def try_except_else_finally_format(body='...', handler='...', orelse='...', final='...'):
     return try_except_else_finally.format(body=body, handler=handler, orelse=orelse, final=final)
@@ -222,11 +228,13 @@ if some:
         z = 1
     else:
         while _:
-            z = 1
+            with _:
+                z = 3
         else:
             z = 3
 else:
-    y = 3
+    with _ as y:
+        pass
     for _ in range(1):
         x = 1
     else:
@@ -240,14 +248,14 @@ else:
 mix_xy = """
 if some:
     try:
-        x = 1
+        import x
     except:
-        x = 2
+        from _ import x
 
     y = 2
     if other:
         x = 1
-        z = 1
+        from _ import _ as z
     else:
         while _:
             z = 1
@@ -259,7 +267,7 @@ else:
     for _ in range(1):
         x = 1
     else:
-        x = 1
+        import X as x
     async for _ in range(1):
         z = 2
     else:
@@ -276,10 +284,11 @@ def test_non_safe_vars(code):
 
 
 @pytest.mark.parametrize(('code', 'safe_vars'), [
-    *list(zip_longest(body_orelse_x, [], fillvalue={'x'})),
-    *list(zip_longest(try_except_else_finally_x, [], fillvalue={'x'})),
-    *list(zip_longest(try_except_else_finally_xy, [], fillvalue={'x', 'y'})),
-    *list(zip_longest(try_except_else_finally_xyz, [], fillvalue={'x', 'y', 'z'})),
+    *default_zip(body_orelse_x, {'x'}),
+    *default_zip(try_except_else_finally_x, {'x'}),
+    *default_zip(try_except_else_finally_xy, {'x', 'y'}),
+    *default_zip(try_except_else_finally_xyz, {'x', 'y', 'z'}),
+    *default_zip(import_x, {'x'}),
     (vars_isolation_x, {'x'}),
     (mix_xyz, {'x', 'y', 'z'}),
     (mix_yz, {'y', 'z'}),
