@@ -348,6 +348,10 @@ if ...:
 else:
     x = ...
 """)
-    vars = SafeVars()
-    assert vars.find(module_node, until=module_node.body[1].body[1])
-    assert vars.fold() == {'z', 'x'}
+    vars_ = get_safe_vars(module_node, until=module_node.body[1].body[1])
+    assert vars_ == {'z', 'x'}
+
+
+def test_find_over_scopeless():
+    module_node = ast.parse('x')
+    assert get_safe_vars(module_node.body[0]) == set()

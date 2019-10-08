@@ -55,9 +55,7 @@ class NestedScopes(Scopes):
             if not descendants
         ]
 
-        if not vars_:
-            return set()
-        return reduce(iand, vars_)
+        return reduce(iand, vars_, set())
 
 
 @final
@@ -94,9 +92,6 @@ class SafeVars:
         self.null_scopes = Scopes([])
 
     def _get_scopes(self, node: ast.AST) -> Scopes:
-        if node in self.scopes_of_stmt:
-            return self.scopes_of_stmt[node]
-
         if isinstance(node, self.BodyOrElse):
             scopes = Scopes(['body', 'orelse'])
         elif isinstance(node, self.Body):
@@ -118,7 +113,6 @@ class SafeVars:
         else:
             scopes = self.null_scopes
 
-        self.scopes_of_stmt[node] = scopes
         return scopes
 
     def find(self, node, until=None, ignored=None) -> bool:
@@ -126,6 +120,7 @@ class SafeVars:
         ignored: typing.Set[str] = ignored or set()
 
         scopes = self._get_scopes(node)
+        self.scopes_of_stmt[node] = scopes
         if scopes is self.null_scopes:
             return False
 
