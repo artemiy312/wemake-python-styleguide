@@ -105,7 +105,7 @@ try_except_else_finally_xyz = [
     try_except_else_finally_format(body=x, handler=y, orelse=z, final=xyz),
 ]
 
-vars_isolation_x = """
+vars_isolation_xfF = """
 x = 1
 
 def f():
@@ -118,27 +118,28 @@ class F:
     v = 3
 """
 
-var_owners_x = """
-def x():
+var_owners_xy = """
+def x(y):
     if _:
         x = 1
     else:
         x = 2
 
-async def x():
+async def x(y):
     while _:
         x = 1
     else:
         x = 2
 
 class A:
+    y = 1
     for _ in _:
         x = 1
     else:
         x = 2
 """
 
-var_owners_isolation_x = """
+var_owners_isolation_xzZ = """
 def x():
     def z():
         y = 3
@@ -275,6 +276,8 @@ else:
 """
 
 
+
+
 @pytest.mark.parametrize('code', [
     *non_safe_vars_body_orelse,
     *non_safe_vars_try,
@@ -289,7 +292,7 @@ def test_non_safe_vars(code):
     *default_zip(try_except_else_finally_xy, {'x', 'y'}),
     *default_zip(try_except_else_finally_xyz, {'x', 'y', 'z'}),
     *default_zip(import_x, {'x'}),
-    (vars_isolation_x, {'x'}),
+    (vars_isolation_xfF, {'x', 'f', 'F'}),
     (mix_xyz, {'x', 'y', 'z'}),
     (mix_yz, {'y', 'z'}),
     (mix_xy, {'x', 'y'}),
@@ -300,8 +303,8 @@ def test_safe_vars(code, safe_vars):
 
 
 @pytest.mark.parametrize(('code', 'safe_vars'), [
-    (var_owners_x, {'x'}),
-    (var_owners_isolation_x, {'x'}),
+    (var_owners_xy, {'x', 'y'}),
+    (var_owners_isolation_xzZ, {'x', 'z', 'Z'}),
 ])
 def test_var_owners(code, safe_vars):
     for owner_node in ast.parse(code).body:
@@ -309,15 +312,42 @@ def test_var_owners(code, safe_vars):
 
 
 @pytest.mark.parametrize(('module_code', 'scopped_code', 'safe_vars'), [
-    (mix_xy, var_owners_x, {'x', 'y'}),
-    (mix_xz, var_owners_x, {'x', 'z'}),
-    (mix_xyz, var_owners_x, {'x', 'y', 'z'}),
-    (mix_yz, var_owners_x, {'x', 'y', 'z'}),
+    (mix_xy, var_owners_xy, {'x', 'y'}),
+    (mix_xz, var_owners_xy, {'x', 'y', 'z'}),
+    (mix_xyz, var_owners_xy, {'x', 'y', 'z'}),
+    (mix_yz, var_owners_xy, {'x', 'y', 'z'}),
 ])
-def test_find_multiple_vars(module_code, scopped_code, safe_vars):
+def test_multiple_find(module_code, scopped_code, safe_vars):
     module_node = ast.parse(module_code)
     for owner_node in ast.parse(scopped_code).body:
         vars = SafeVars()
         vars.find(owner_node)
         vars.find(module_node)
         assert vars.fold() == safe_vars
+
+
+def test_find_until():
+    module_node = ast.parse("""
+if ...:
+    x = ...
+else:
+    x = ...
+x
+z = 2
+""")
+    safe = get_safe_vars(module_node, until=module_node.body[1])
+    assert safe == {'x'}
+
+
+def test_find_until_2():
+    module_node = ast.parse("""
+z = 1
+if ...:
+    x = ...
+    x
+else:
+    x = ...
+""")
+    vars = SafeVars()
+    assert vars.find(module_node, until=module_node.body[1].body[1])
+    assert vars.fold() == {'z', 'x'}
