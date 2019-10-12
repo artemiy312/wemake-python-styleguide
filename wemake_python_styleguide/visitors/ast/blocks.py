@@ -6,6 +6,7 @@ from typing import (
     Callable,
     ClassVar,
     DefaultDict,
+    Dict,
     List,
     Set,
     Tuple,
@@ -20,6 +21,7 @@ from wemake_python_styleguide.logic.naming.name_nodes import (
     flat_variable_names,
 )
 from wemake_python_styleguide.logic.nodes import get_context, get_parent
+from wemake_python_styleguide.logic.safe_vars import get_safe_vars
 from wemake_python_styleguide.logic.scopes import (
     BlockScope,
     OuterScope,
@@ -41,6 +43,7 @@ from wemake_python_styleguide.violations.best_practices import (
     ControlVarUsedAfterBlockViolation,
     OuterScopeShadowingViolation,
 )
+from wemake_python_styleguide.violations.consistency import NonExhaustiveVariableViolation
 from wemake_python_styleguide.visitors import base, decorators
 
 #: That's how we represent contexts for control variables.
@@ -284,3 +287,44 @@ class AfterBlockVariablesVisitor(base.BaseNodeVisitor):
         self.add_violation(
             ControlVarUsedAfterBlockViolation(node, text=node.id),
         )
+
+
+@decorators.alias('visit_contexts', (
+    'visit_Module',
+    'visit_FunctionDef',
+    'visit_AsyncFunctionDef',
+    'visit_ClassDef',
+))
+class SafeVariableVisitor(base.BaseNodeVisitor):
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.safe_vars: Dict[ast.AST, Set[str]] = {}
+        self.builtins = set(globals()['__builtins__'])
+
+    def visit_contexts(self, node: ast.AST) -> None:
+        if node not in self.safe_vars:
+            self.safe_vars[node] = get_safe_vars(node)
+        self.generic_visit(node)
+
+    def is_outer_safe_var(self, node: ast.Name, local_context) -> bool:
+        outer_context = get_context(local_context)
+        while outer_context is not None:
+            outer_vars = self.safe_vars[outer_context]
+            if node.id in outer_vars:
+                return True
+            outer_context = get_context(outer_context)
+
+        return False
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Load) and node.id not in self.builtins:
+            local_context = cast(ast.AST, get_context(node))
+            local_vars = get_safe_vars(local_context, until=node)
+
+            if not (node.id in local_vars or self.is_outer_safe_var(node, local_context)):
+                self.add_violation(
+                    NonExhaustiveVariableViolation(node, text=node.id),
+                )
+
+        self.generic_visit(node)

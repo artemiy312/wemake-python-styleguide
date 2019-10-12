@@ -3,7 +3,7 @@ import enum
 from collections import defaultdict, namedtuple
 from contextlib import contextmanager
 from functools import reduce
-from operator import iand, ior
+from operator import and_, or_
 import typing
 
 from typing_extensions import final
@@ -12,36 +12,76 @@ from wemake_python_styleguide.logic.functions import get_all_arguments
 from wemake_python_styleguide.logic.naming.name_nodes import (
     flat_variable_names, get_variables_from_node
 )
+from wemake_python_styleguide.logic.nodes import get_parent
 
 
 class Scopes:
 
-    def __init__(self, scopes: typing.List[str]) -> None:
+    TargetBodyOrElse = ast.For, ast.AsyncFor
+    BodyOrElse = ast.If, ast.While, *TargetBodyOrElse
+    Fn = ast.FunctionDef, ast.AsyncFunctionDef
+    Def = ast.ClassDef, *Fn
+    Body = ast.Module, ast.ExceptHandler, *Def
+    Import = ast.Import, ast.ImportFrom
+    WithItem = ast.With, ast.AsyncWith
+
+    def __init__(self, node: ast.AST, scopes: typing.List[str]) -> None:
+        self.node = node
         self.vars_: typing.Dict[str, typing.Set[str]] = {
             scope: set() for scope in scopes
         }
 
-    def scopes(self) -> typing.List[str]:
-        return list(self.vars_)
+    @classmethod
+    def from_node(cls, node: ast.AST) -> typing.Optional['Scopes']:
+        if isinstance(node, cls.BodyOrElse):
+            scopes = Scopes(node, ['body', 'orelse'])
+        elif isinstance(node, cls.Body):
+            scopes = Scopes(node, ['body'])
+        elif isinstance(node, cls.Import):
+            scopes = Scopes(node, ['names'])
+        elif isinstance(node, cls.WithItem):
+            scopes = NestedScopes(node, {
+                'body': ['items'],
+                'items': [],
+            })
+        elif isinstance(node, ast.Try):
+            scopes = NestedScopes(node, {
+                'finalbody': ['handlers', 'orelse'],
+                'body': [],
+                'handlers': [],
+                'orelse': ['body'],
+            })
+        else:
+            scopes = None
+
+        return scopes
 
     def add_to_scope(self, scope: str, vars_: typing.Set[str]) -> None:
         self.vars_[scope].update(vars_)
 
+    def scope_names(self) -> typing.List[str]:
+        return list(self.vars_)
+
     def scope_vars(self, scope: str) -> typing.Set[str]:
-        return self.vars_.get(scope)
+        return self.vars_[scope]
 
     def safe_vars(self) -> typing.Set[str]:
         if not self.vars_:
             return set()
-        return reduce(iand, self.vars_.values())
+        return reduce(and_, self.vars_.values())
+
+    def __iter__(self) -> typing.Iterator[typing.Tuple[str, ast.AST]]:
+        for scope in self.scope_names():
+            for stmt in getattr(self.node, scope):
+                yield scope, stmt
 
 
 @final
 class NestedScopes(Scopes):
 
-    def __init__(self, hierarchy: typing.Dict[str, typing.List[str]]) -> None:
+    def __init__(self, node, hierarchy: typing.Dict[str, typing.List[str]]) -> None:
         self.hierarchy = hierarchy
-        super().__init__(list(hierarchy.keys()))
+        super().__init__(node, list(hierarchy.keys()))
 
     def add_to_scope(self, scope: str, vars_: typing.Set[str]) -> None:
         super().add_to_scope(scope, vars_)
@@ -55,148 +95,166 @@ class NestedScopes(Scopes):
             if not descendants
         ]
 
-        return reduce(iand, vars_, set())
-
-
-@final
-class ScopesChain:
-
-    def __init__(self, scopes: typing.List[str]) -> None:
-        self.scopes = scopes
-        self.scope = ''
-
-    def stmts(self, node: ast.AST) -> typing.Iterator[ast.AST]:
-        for scope in self.scopes:
-            self.scope = scope
-            for stmt in getattr(node, scope):
-                yield stmt
+        if not vars_:
+            return set()
+        return reduce(and_, vars_)
 
 
 @final
 class SafeVars:
 
-    BodyOrElse = ast.If, ast.For, ast.AsyncFor, ast.While
-    Fn = ast.FunctionDef, ast.AsyncFunctionDef
-    Def = Fn + (ast.ClassDef,)
-    Body = Def + (ast.Module, ast.ExceptHandler)
-    Import = ast.Import, ast.ImportFrom
+    SharedScope = (
+        ast.Try,
+        ast.ExceptHandler,
+        *Scopes.BodyOrElse,
+        *Scopes.TargetBodyOrElse,
+        *Scopes.Import,
+        *Scopes.WithItem,
+    )
 
-    WithItem = ast.With, ast.AsyncWith
-    SharedScope = BodyOrElse + Import + WithItem + (ast.Try, ast.ExceptHandler)
+    ScopeNodes = (
+        ast.Module,
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+        ast.For,
+        ast.AsyncFor,
+        ast.While,
+        ast.If,
+        ast.With,
+        ast.AsyncWith,
+        ast.Try,
+        ast.ExceptHandler
+    )
 
     def __init__(self) -> None:
-        self.stmt_hierarchy: typing.Dict[ast.AST, ast.AST] = {}
+        # child to parent
+        self.children_hierarchy: typing.Dict[ast.AST, ast.AST] = {}
+        # stmt scopes
         self.scopes_of_stmt: typing.Dict[ast.AST, Scopes] = {}
-        self.vars_of_stmt: typing.Dict[ast.AST, typing.Set[str]] = {}
+        self.scope_name_of_stmt: typing.Dict[ast.AST, str] = {}
+        self.until_vars: typing.Dict[ast.AST, typing.Set[str]] = {}
 
-        self.null_scopes = Scopes([])
+        self.until_reached = False
 
-    def _get_scopes(self, node: ast.AST) -> Scopes:
-        if isinstance(node, self.BodyOrElse):
-            scopes = Scopes(['body', 'orelse'])
-        elif isinstance(node, self.Body):
-            scopes = Scopes(['body'])
-        elif isinstance(node, self.Import):
-            scopes = Scopes(['names'])
-        elif isinstance(node, self.WithItem):
-            scopes = NestedScopes({
-                'body': ['items'],
-                'items': [],
-            })
-        elif isinstance(node, ast.Try):
-            scopes = NestedScopes({
-                'finalbody': ['handlers', 'orelse'],
-                'body': [],
-                'handlers': [],
-                'orelse': ['body'],
-            })
-        else:
-            scopes = self.null_scopes
+    def _get_scope_level_node(self, node: ast.AST) -> ast.AST:
+        scope_node = node
+        scope = get_parent(node)
 
-        return scopes
+        while not (isinstance(scope, self.ScopeNodes) or scope is None):
+            scope_node = scope
+            scope = get_parent(scope)
 
-    def find(self, node, until=None, ignored=None) -> bool:
+        for parent_scope in Scopes.from_node(scope).scope_names():
+            if scope_node in getattr(scope, parent_scope):
+                return scope_node
+
+        return scope
+
+    def find(
+        self,
+        node: ast.AST,
+        until: typing.Optional[ast.AST]=None,
+        ignored: typing.Optional[typing.Set[str]]=None
+    ) -> None:
         """Returns True if meet `until` node otherwise False."""
-        ignored: typing.Set[str] = ignored or set()
+        find_ignored: typing.Set[str] = ignored or set()
 
-        scopes = self._get_scopes(node)
+        find_until: typing.Optional[ast.AST]
+        if until:
+            find_until = self._get_scope_level_node(until)
+        else:
+            find_until = None
+
+        scopes = Scopes.from_node(node)
+        if scopes is None:
+            return
+
         self.scopes_of_stmt[node] = scopes
-        if scopes is self.null_scopes:
-            return False
 
-        chain = ScopesChain(scopes.scopes())
-
-        if isinstance(node, self.Fn):
+        if isinstance(node, Scopes.Fn):
             vars_ = {arg.arg for arg in get_all_arguments(node)}
             scopes.add_to_scope('body', vars_)
 
-        for stmt in chain.stmts(node):
-            if stmt == until:
-                # put vars from a current scope to all scopes
-                # to indetify it as safe for `until` node
-                vars_ = scopes.scope_vars(chain.scope)
-                for scope in scopes.scopes():
-                    scopes.add_to_scope(scope, vars_)
-                return True
+        if isinstance(node, Scopes.TargetBodyOrElse):
+            scopes.add_to_scope('body', get_variables_from_node(node.target))
 
-            if isinstance(stmt, ast.Assign):
+        for scope, stmt in scopes:
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
                 vars_ = {
                     name
                     for name in flat_variable_names([stmt])
-                    if name not in ignored
+                    if name not in find_ignored
                 }
-                scopes.add_to_scope(chain.scope, vars_)
+                scopes.add_to_scope(scope, vars_)
 
-            elif isinstance(stmt, self.Def):
-                scopes.add_to_scope(chain.scope, {stmt.name})
+            elif isinstance(stmt, Scopes.Def):
+                scopes.add_to_scope(scope, {stmt.name})
 
             elif isinstance(stmt, ast.alias):
                 name = stmt.asname or stmt.name
-                scopes.add_to_scope(chain.scope, {name})
+                scopes.add_to_scope(scope, {name})
 
             elif isinstance(stmt, ast.withitem) and stmt.optional_vars:
                 scopes.add_to_scope(
-                    chain.scope,
+                    scope,
                     set(get_variables_from_node(stmt.optional_vars))
                 )
 
             elif isinstance(stmt, self.SharedScope):
-                vars_ = scopes.scope_vars(chain.scope)
+                vars_ = scopes.scope_vars(scope)
 
-                self.stmt_hierarchy[stmt] = node
-                self.vars_of_stmt[stmt] = vars_
+                self.scope_name_of_stmt[stmt] = scope
+                self.children_hierarchy[stmt] = node
                 if isinstance(stmt, ast.ExceptHandler):
-                    new_shadow = ignored
+                    new_shadow = find_ignored
                 else:
-                    new_shadow = vars_ | ignored
-                if self.find(stmt, until, ignored=new_shadow):
-                    return True
-        return False
+                    new_shadow = vars_ | find_ignored
+                self.find(stmt, find_until, ignored=new_shadow)
+
+            if stmt == find_until or self.until_reached:
+                self.until_reached = True
+                self.until_vars[node] = scope
+                break
 
     def fold(self) -> typing.Set[str]:
         if len(self.scopes_of_stmt) < 1:
             return set()
 
-        descendants = set(self.stmt_hierarchy)
+        descendants = set(self.children_hierarchy)
         roots = set(self.scopes_of_stmt) - descendants
 
         # expand vars to outer scopes
-        while len(self.stmt_hierarchy) != 0:
-            leafs = set(self.stmt_hierarchy) - set(self.stmt_hierarchy.values())
-            for leaf in leafs:
-                del self.stmt_hierarchy[leaf]
-                scopes = self.scopes_of_stmt[leaf]
-                self.vars_of_stmt[leaf].update(scopes.safe_vars())
+        while len(self.children_hierarchy) != 0:
+            children = set(self.children_hierarchy) - set(self.children_hierarchy.values())
+            for child in children:
+                parent = self.children_hierarchy.pop(child)
+                self.scopes_of_stmt[child].safe_vars()
+
+                self.scopes_of_stmt[parent].add_to_scope(
+                    self.scope_name_of_stmt[child],
+                    self.scopes_of_stmt[child].safe_vars(),
+                )
+
+        until_vars = set()
+        for stmt, scopes in self.scopes_of_stmt.items():
+            if stmt in self.until_vars:
+                until_vars.update(scopes.scope_vars(self.until_vars[stmt]))
 
         # roots
         safe_vars = [
             self.scopes_of_stmt[root].safe_vars()
             for root in roots
         ]
-        return reduce(ior, safe_vars, set())
+
+        return reduce(or_, safe_vars, until_vars)
 
 
-def get_safe_vars(node, until=None):
+def get_safe_vars(
+    node: ast.AST,
+    until: typing.Optional[ast.AST]=None,
+    ignored: typing.Optional[typing.Set[str]]=None
+) -> typing.Set[str]:
     vars_ = SafeVars()
-    vars_.find(node, until)
+    vars_.find(node, until, ignored)
     return vars_.fold()

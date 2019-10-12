@@ -326,8 +326,8 @@ def test_multiple_find(module_code, scopped_code, safe_vars):
         assert vars.fold() == safe_vars
 
 
-def test_find_until():
-    module_node = ast.parse("""
+def test_find_until(parse_ast_tree):
+    module_node = parse_ast_tree("""
 if ...:
     x = ...
 else:
@@ -339,8 +339,8 @@ z = 2
     assert safe == {'x'}
 
 
-def test_find_until_2():
-    module_node = ast.parse("""
+def test_find_until_2(parse_ast_tree):
+    module_node = parse_ast_tree("""
 z = 1
 if ...:
     x = ...
@@ -352,6 +352,56 @@ else:
     assert vars_ == {'z', 'x'}
 
 
-def test_find_over_scopeless():
-    module_node = ast.parse('x')
+def test_find_until_3(parse_ast_tree):
+    module_node = parse_ast_tree("""
+while ... is not None:
+    outer_vars = ...
+    if outer_vars is None:
+        outer_vars = ...
+    if ... in outer_vars:
+        ...
+""")
+    vars_ = get_safe_vars(module_node, until=module_node.body[-1].body[-1].test.comparators[0])
+    assert vars_ == {'outer_vars'}
+
+
+def test_find_until_4(parse_ast_tree):
+    module_node = parse_ast_tree("""
+if ...:
+    pass
+elif ...:
+    keyword_args = 1
+    keyword_args
+""")
+    vars_ = get_safe_vars(module_node, until=module_node.body[-1].orelse[0].body[-1])
+    assert vars_ == {'keyword_args'}
+
+
+def test_find_until_5(parse_ast_tree):
+    module_node = parse_ast_tree("""
+if ...:
+    keyword_args = 1
+    if ...:
+        keyword_args
+""")
+    vars_ = get_safe_vars(module_node, until=module_node.body[-1].body[-1].body[0])
+    assert vars_ == {'keyword_args'}
+
+
+def test_find_until_6(parse_ast_tree):
+    module_node = parse_ast_tree("""
+if ...:
+    if ...:
+        keyword_a = 2
+    else:
+        keyword_a = 1
+
+    keyword_a
+""")
+    vars_ = get_safe_vars(module_node, until=module_node.body[0].body[-1])
+    assert vars_ == {'keyword_a'}
+
+
+def test_find_over_scopeless(parse_ast_tree):
+    module_node = parse_ast_tree('x')
     assert get_safe_vars(module_node.body[0]) == set()

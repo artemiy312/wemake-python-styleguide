@@ -73,12 +73,9 @@ Summary
    MeaninglessNumberOperationViolation
    OperationSignNegationViolation
    VagueImportViolation
-<<<<<<< HEAD
    AdditionAssignmentOnListViolation
    RedundantSubscriptViolation
-=======
-   NonExhaustiveVariable
->>>>>>> Create violation for non-exhaustive variables
+   NonExhaustiveVariableViolation
 
 Consistency checks
 ------------------
@@ -131,12 +128,9 @@ Consistency checks
 .. autoclass:: MeaninglessNumberOperationViolation
 .. autoclass:: OperationSignNegationViolation
 .. autoclass:: VagueImportViolation
-<<<<<<< HEAD
 .. autoclass:: AdditionAssignmentOnListViolation
 .. autoclass:: RedundantSubscriptViolation
-=======
-.. autoclass:: NonExhaustiveVariable
->>>>>>> Create violation for non-exhaustive variables
+.. autoclass:: NonExhaustiveVariableViolation
 
 """
 
@@ -1849,32 +1843,29 @@ class RedundantSubscriptViolation(ASTViolation):
 
 
 @final
-class NonExhaustiveVariable(ASTViolation):
+class NonExhaustiveVariableViolation(ASTViolation):
     """
-    Forbids imports that outside of the module may cause confusion.
+    Forbids use of non-exhaustive varialbes.
 
     Reasoning:
-        See ``datetime.*`` in code? You know that it's from datetime.
-        See ``BaseView`` in a Django project? You know where it is from.
-        See ``loads``? It can be anything: ``yaml``, ``toml``, ``json`` ...
+        Using non-exhaustive variables may cause a runtime error.
 
-        import json
-
-        ...
-
-        json.loads(content)
+    Example::
 
         # Wrong:
-        from json import loads
+        if ...:
+            x = 1
+        print(x)
 
-        ...
-
-        loads(content)
+        # Correct:
+        if ...:
+            x = 1
+        else:
+            x = 2
+        print(x)
 
     .. versionadded:: 0.13.0
-
-    TODO: edit the doc-string and the error template
     """
 
-    error_template = 'Found vague import that may cause confusion: {0}'
+    error_template = 'Found use of non-exhaustive variable: {0}'
     code = 350
