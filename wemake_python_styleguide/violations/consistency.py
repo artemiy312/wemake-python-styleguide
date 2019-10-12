@@ -73,8 +73,12 @@ Summary
    MeaninglessNumberOperationViolation
    OperationSignNegationViolation
    VagueImportViolation
+<<<<<<< HEAD
    AdditionAssignmentOnListViolation
    RedundantSubscriptViolation
+=======
+   NonExhaustiveVariable
+>>>>>>> Create violation for non-exhaustive variables
 
 Consistency checks
 ------------------
@@ -127,8 +131,12 @@ Consistency checks
 .. autoclass:: MeaninglessNumberOperationViolation
 .. autoclass:: OperationSignNegationViolation
 .. autoclass:: VagueImportViolation
+<<<<<<< HEAD
 .. autoclass:: AdditionAssignmentOnListViolation
 .. autoclass:: RedundantSubscriptViolation
+=======
+.. autoclass:: NonExhaustiveVariable
+>>>>>>> Create violation for non-exhaustive variables
 
 """
 
@@ -1838,3 +1846,35 @@ class RedundantSubscriptViolation(ASTViolation):
 
     error_template = 'Found redundant subscript slice: {0}'
     code = 349
+
+
+@final
+class NonExhaustiveVariable(ASTViolation):
+    """
+    Forbids imports that outside of the module may cause confusion.
+
+    Reasoning:
+        See ``datetime.*`` in code? You know that it's from datetime.
+        See ``BaseView`` in a Django project? You know where it is from.
+        See ``loads``? It can be anything: ``yaml``, ``toml``, ``json`` ...
+
+        import json
+
+        ...
+
+        json.loads(content)
+
+        # Wrong:
+        from json import loads
+
+        ...
+
+        loads(content)
+
+    .. versionadded:: 0.13.0
+
+    TODO: edit the doc-string and the error template
+    """
+
+    error_template = 'Found vague import that may cause confusion: {0}'
+    code = 350
