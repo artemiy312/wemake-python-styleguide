@@ -8,12 +8,3 @@
 # lambda
 # | Lambda(arguments args, expr body)
 lambda x: x
-
-# with
-# | With(withitem* items, stmt* body, string? type_comment)
-# | AsyncWith(withitem* items, stmt* body, string? type_comment)
-with '' as f:
-    f
-async def x():
-    async with '' as z:
-        z

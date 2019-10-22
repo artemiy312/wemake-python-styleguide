@@ -1,7 +1,5 @@
 import ast
-import enum
-from collections import defaultdict, namedtuple
-from contextlib import contextmanager
+from collections import OrderedDict
 from functools import reduce
 from operator import and_, or_
 import typing
@@ -31,31 +29,6 @@ class Scopes:
             scope: set() for scope in scopes
         }
 
-    @classmethod
-    def from_node(cls, node: ast.AST) -> typing.Optional['Scopes']:
-        if isinstance(node, cls.BodyOrElse):
-            scopes = Scopes(node, ['body', 'orelse'])
-        elif isinstance(node, cls.Body):
-            scopes = Scopes(node, ['body'])
-        elif isinstance(node, cls.Import):
-            scopes = Scopes(node, ['names'])
-        elif isinstance(node, cls.WithItem):
-            scopes = NestedScopes(node, {
-                'body': ['items'],
-                'items': [],
-            })
-        elif isinstance(node, ast.Try):
-            scopes = NestedScopes(node, {
-                'finalbody': ['handlers', 'orelse'],
-                'body': [],
-                'handlers': [],
-                'orelse': ['body'],
-            })
-        else:
-            scopes = None
-
-        return scopes
-
     def add_to_scope(self, scope: str, vars_: typing.Set[str]) -> None:
         self.vars_[scope].update(vars_)
 
@@ -79,7 +52,7 @@ class Scopes:
 @final
 class NestedScopes(Scopes):
 
-    def __init__(self, node, hierarchy: typing.Dict[str, typing.List[str]]) -> None:
+    def __init__(self, node, hierarchy: OrderedDict) -> None:
         self.hierarchy = hierarchy
         super().__init__(node, list(hierarchy.keys()))
 
@@ -98,6 +71,31 @@ class NestedScopes(Scopes):
         if not vars_:
             return set()
         return reduce(and_, vars_)
+
+
+def get_scopes(node: ast.AST) -> typing.Optional[Scopes]:
+    if isinstance(node, Scopes.BodyOrElse):
+        scopes = Scopes(node, ['body', 'orelse'])
+    elif isinstance(node, Scopes.Body):
+        scopes = Scopes(node, ['body'])
+    elif isinstance(node, Scopes.Import):
+        scopes = Scopes(node, ['names'])
+    elif isinstance(node, Scopes.WithItem):
+        scopes = NestedScopes(node, OrderedDict([
+            ('items', ['body']),
+            ('body', []),
+        ]))
+    elif isinstance(node, ast.Try):
+        scopes = NestedScopes(node, OrderedDict([
+            ('body', []),
+            ('handlers', []),
+            ('orelse', ['body']),
+            ('finalbody', ['handlers', 'orelse']),
+        ]))
+    else:
+        scopes = None
+
+    return scopes
 
 
 @final
@@ -145,7 +143,7 @@ class SafeVars:
             scope_node = scope
             scope = get_parent(scope)
 
-        for parent_scope in Scopes.from_node(scope).scope_names():
+        for parent_scope in get_scopes(scope).scope_names():
             if scope_node in getattr(scope, parent_scope):
                 return scope_node
 
@@ -166,7 +164,7 @@ class SafeVars:
         else:
             find_until = None
 
-        scopes = Scopes.from_node(node)
+        scopes = get_scopes(node)
         if scopes is None:
             return
 
@@ -176,8 +174,11 @@ class SafeVars:
             vars_ = {arg.arg for arg in get_all_arguments(node)}
             scopes.add_to_scope('body', vars_)
 
-        if isinstance(node, Scopes.TargetBodyOrElse):
+        elif isinstance(node, Scopes.TargetBodyOrElse):
             scopes.add_to_scope('body', get_variables_from_node(node.target))
+
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            scopes.add_to_scope('body', node.name)
 
         for scope, stmt in scopes:
             if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
