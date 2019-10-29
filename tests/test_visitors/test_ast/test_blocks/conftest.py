@@ -40,15 +40,16 @@ def assign_statement(request):
     return request.param
 
 
+def _format_with_scpaces(template: str, spaces: int, subs: List[str]) -> str:
+    """Format a context template with given spaces number as indentation."""
+    delimeter = '\n' + ' ' * spaces
+    return template.format(delimeter.join(sub.replace('\n', delimeter) for sub in subs))
+
+
 @pytest.fixture(params=[
     (function_context, 4),
     (method_context, 8),
 ])
 def format_context_body(request):
-    """Get context body template."""
-    def format_with_scpaces(template: str, spaces: int, subs: List[str]) -> str:
-        """Format a context template with given spaces number as indentation."""
-        delimeter = '\n' + ' ' * spaces
-        return template.format(delimeter.join(sub.replace('\n', delimeter) for sub in subs))
-
-    return partial(format_with_scpaces, *request.param)
+    """Format context body template."""
+    return partial(_format_with_scpaces, *request.param)

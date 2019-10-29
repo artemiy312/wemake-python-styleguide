@@ -50,7 +50,7 @@ def test_unsafe_vars_after_try(
     format_context_body,
     try_scope_var,
 ):
-    """Unsafe variables exist after try statement."""
+    """A non-exhaustively assigned variable isn't safe after try statement."""
     variable_name = 'x'
     tree = parse_ast_tree(mode(format_context_body([
         format_try({
@@ -58,29 +58,6 @@ def test_unsafe_vars_after_try(
             for scope, var in try_scope_var.items()
         }),
         variable_name,
-    ])))
-
-    visitor = SafeVariableVisitor(default_options, tree=tree)
-    visitor.run()
-
-    assert_errors(visitor, [NonExhaustiveVariableViolation])
-    assert_error_text(visitor, variable_name)
-
-
-@pytest.mark.parametrize('try_scope', try_scopes)
-def test_unsafe_vars_inside_try(
-    assert_errors,
-    assert_error_text,
-    parse_ast_tree,
-    default_options,
-    mode,
-    format_context_body,
-    try_scope,
-):
-    """Unsafe variables exist inside try statement."""
-    variable_name = 'safe'
-    tree = parse_ast_tree(mode(format_context_body([
-        format_try({try_scope: variable_name}),
     ])))
 
     visitor = SafeVariableVisitor(default_options, tree=tree)
@@ -105,7 +82,7 @@ def test_safe_vars_after_try(
     format_context_body,
     scopes_with_var,
 ):
-    """Safe variables exist after try statement."""
+    """An exhaustively assigned variable is safe after try statement."""
     variable_name = 'x'
     tree = parse_ast_tree(mode(format_context_body([
         format_try({
@@ -122,6 +99,29 @@ def test_safe_vars_after_try(
 
 
 @pytest.mark.parametrize('try_scope', try_scopes)
+def test_unsafe_vars_inside_try(
+    assert_errors,
+    assert_error_text,
+    parse_ast_tree,
+    default_options,
+    mode,
+    format_context_body,
+    try_scope,
+):
+    """An unassigned variable inside try scope isn't safe."""
+    variable_name = 'unsafe'
+    tree = parse_ast_tree(mode(format_context_body([
+        format_try({try_scope: variable_name}),
+    ])))
+
+    visitor = SafeVariableVisitor(default_options, tree=tree)
+    visitor.run()
+
+    assert_errors(visitor, [NonExhaustiveVariableViolation])
+    assert_error_text(visitor, variable_name)
+
+
+@pytest.mark.parametrize('try_scope', try_scopes)
 def test_safe_vars_inside_try(
     assert_errors,
     assert_error_text,
@@ -132,7 +132,7 @@ def test_safe_vars_inside_try(
     format_context_body,
     try_scope,
 ):
-    """Safe variables exist inside try statement."""
+    """An assigned variable inside try scope is safe."""
     variable_name = 'x'
     try_scope_body = f"""
     {assign_statement.format(variable_name)}
@@ -159,7 +159,7 @@ def test_safe_vars_inside_except_item(
     format_context_body,
     except_items,
 ):
-    """Safe variables exist inside try statement."""
+    """An except item is the safe variable inside the scope."""
     variable_name = 'x'
     tree = parse_ast_tree(mode(format_context_body([
         format_try({
