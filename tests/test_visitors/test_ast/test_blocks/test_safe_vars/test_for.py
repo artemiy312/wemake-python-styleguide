@@ -7,31 +7,21 @@ from wemake_python_styleguide.violations.consistency import (
 )
 from wemake_python_styleguide.visitors.ast.blocks import SafeVariableVisitor
 
-try_scopes = ['body', 'except_handler', 'orelse', 'final_body']
-try_except_else_finally = """
-try:
+for_targets = ['{0}', '{0}, _', '_, *{0}']
+for_scopes = ['body', 'orelse']
+for_else = """
+for {target} in range():
     {body}
-except {except_name}:
-    {except_handler}
 else:
     {orelse}
-finally:
-    {final_body}
 """
-except_items = [
-    'Exception as {0}',
-    '(Exception, ValueError)  as {0}',
-]
 
 
 @pytest.mark.parametrize('scopes_var', [
     {},
     {'body': 'x'},
-    {'except_handler': 'x'},
     {'orelse': 'x'},
-    {'body': 'x', 'except_handler': 'y'},
-    {'except_handler': 'y', 'orelse': 'x'},
-    {'body': 'x', 'except_handler': 'y', 'orelse': 'x'},
+    {'body': 'y', 'orelse': 'z'},
 ])
 def test_unsafe_vars_after_statement(
     assert_errors,
@@ -47,7 +37,8 @@ def test_unsafe_vars_after_statement(
     """A non-exhaustively assigned variable isn't safe after the statement."""
     variable_name = 'x'
     statement = default_formatter.format(
-        try_except_else_finally,
+        for_else,
+        target='_',
         **{
             scope: assign_statement.format(scope_var)
             for scope, scope_var in scopes_var.items()
@@ -62,11 +53,7 @@ def test_unsafe_vars_after_statement(
     assert_error_text(visitor, variable_name)
 
 
-@pytest.mark.parametrize('scopes_with_var', [
-    ['final_body'],
-    ['body', 'except_handler'],
-    ['except_handler', 'orelse'],
-])
+@pytest.mark.parametrize('scopes_with_var', [for_scopes])
 def test_safe_vars_after_statement(
     assert_errors,
     assert_error_text,
@@ -81,7 +68,8 @@ def test_safe_vars_after_statement(
     """An exhaustively assigned variable is safe after the statement."""
     variable_name = 'x'
     statement = default_formatter.format(
-        try_except_else_finally,
+        for_else,
+        target='_',
         **{
             scope: assign_statement.format(variable_name)
             for scope in scopes_with_var
@@ -95,7 +83,7 @@ def test_safe_vars_after_statement(
     assert_errors(visitor, [])
 
 
-@pytest.mark.parametrize('statement_scope', try_scopes)
+@pytest.mark.parametrize('statement_scope', for_scopes)
 def test_unsafe_vars_inside_scope(
     assert_errors,
     assert_error_text,
@@ -109,7 +97,8 @@ def test_unsafe_vars_inside_scope(
     """An unassigned variable inside a scope isn't safe."""
     variable_name = 'unsafe'
     statement = default_formatter.format(
-        try_except_else_finally,
+        for_else,
+        target='_',
         **{statement_scope: variable_name},
     )
 
@@ -121,7 +110,7 @@ def test_unsafe_vars_inside_scope(
     assert_error_text(visitor, variable_name)
 
 
-@pytest.mark.parametrize('statement_scope', try_scopes)
+@pytest.mark.parametrize('statement_scope', for_scopes)
 def test_safe_vars_inside_scope(
     assert_errors,
     assert_error_text,
@@ -138,21 +127,25 @@ def test_safe_vars_inside_scope(
     scope_body = """
     {0}
     {1}
-    """.format(assign_statement.format(variable_name), variable_name)
-    statement = default_formatter.format(
-        try_except_else_finally,
+    """.format(
+        assign_statement.format(variable_name),
+        variable_name,
+    )
+    for_ = default_formatter.format(
+        for_else,
+        target='_',
         **{statement_scope: scope_body},
     )
 
-    tree = parse_ast_tree(mode(format_context_body([statement])))
+    tree = parse_ast_tree(mode(format_context_body([for_])))
     visitor = SafeVariableVisitor(default_options, tree=tree)
     visitor.run()
 
     assert_errors(visitor, [])
 
 
-@pytest.mark.parametrize('except_item', except_items)
-def test_safe_vars_inside_except_item(
+@pytest.mark.parametrize('for_target', for_targets)
+def test_target_safe_vars(
     assert_errors,
     assert_error_text,
     parse_ast_tree,
@@ -161,14 +154,14 @@ def test_safe_vars_inside_except_item(
     assign_statement,
     format_context_body,
     default_formatter,
-    except_item,
+    for_target,
 ):
-    """An except item is the safe variable inside the scope."""
+    """A statement's target is the safe variable inside the body scope."""
     variable_name = 'x'
     statement = default_formatter.format(
-        try_except_else_finally,
-        except_name=except_item.format(variable_name),
-        except_handler=variable_name,
+        for_else,
+        target=for_target.format(variable_name),
+        body=variable_name,
     )
 
     tree = parse_ast_tree(mode(format_context_body([statement])))

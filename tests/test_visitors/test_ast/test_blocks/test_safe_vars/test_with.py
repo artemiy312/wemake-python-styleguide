@@ -7,7 +7,7 @@ from wemake_python_styleguide.violations.consistency import (
 )
 from wemake_python_styleguide.visitors.ast.blocks import SafeVariableVisitor
 
-with_ = "with {items}: {body}"
+with_ = 'with {items}: {body}'
 with_items = [
     '... as {0}',
     '... as ({0}, variable)',
@@ -17,21 +17,21 @@ with_items = [
 ]
 
 
-@pytest.mark.parametrize('with_items', with_items)
-def test_unsafe_vars_inside_with(
+@pytest.mark.parametrize('with_item', with_items)
+def test_unsafe_vars_inside_scope(
     assert_errors,
     assert_error_text,
     parse_ast_tree,
     mode,
     default_options,
     format_context_body,
-    with_items,
+    with_item,
 ):
-    """An unassigned variable isn't safe inside the scope."""
+    """An unassigned variable inside a scope isn't safe."""
     variable_name = 'unsafe'
     code = mode(format_context_body([
         with_.format(
-            items=with_items.format('safe'),
+            items=with_item.format('safe'),
             body=variable_name,
         ),
     ]))
@@ -52,19 +52,18 @@ def test_safe_vars_inside_with_body(
     default_options,
     mode,
     assign_statement,
+    default_formatter,
     format_context_body,
 ):
     """A variable assigned inside the scope is safe."""
     variable_name = 'safe'
-    with_body = f"""
-    {assign_statement.format(variable_name)}
-    {variable_name}"""
+    scope_body = """
+    {0}
+    {1}
+    """.format(assign_statement.format(variable_name), variable_name)
 
     code = mode(format_context_body([
-        with_.format(
-            items='...',
-            body=with_body,
-        ),
+        default_formatter.format(with_, body=scope_body),
     ]))
 
     tree = parse_ast_tree(code)
@@ -75,21 +74,21 @@ def test_safe_vars_inside_with_body(
     assert_errors(visitor, [])
 
 
-@pytest.mark.parametrize('with_items', with_items)
-def test_safe_vars_inside_with_items(
+@pytest.mark.parametrize('with_item', with_items)
+def test_safe_vars_from_with_items(
     assert_errors,
     assert_error_text,
     parse_ast_tree,
     default_options,
     mode,
     format_context_body,
-    with_items,
+    with_item,
 ):
-    """A with item is safe inside the scope."""
+    """A statement item is safe inside the scope."""
     variable_name = 'safe'
     code = mode(format_context_body([
         with_.format(
-            items=with_items.format(variable_name),
+            items=with_item.format(variable_name),
             body=variable_name,
         ),
     ]))
